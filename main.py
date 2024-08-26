@@ -2,6 +2,7 @@ from fastapi import FastAPI, Form, HTTPException
 from PIL import Image, ImageDraw, ImageFont
 from fastapi.responses import HTMLResponse, RedirectResponse
 import sqlite3
+import csv
 import os
 
 app = FastAPI()
@@ -95,6 +96,19 @@ def print_label(attendee):
 
     # Print the label using CUPS
     os.system(f"lp -d DYMOLabelWriter -o fit-to-page {label_path}")
+
+    @app.post("/import/")
+    async def import_attendees(file: UploadFile = File(...)):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        reader = csv.DictReader(file.file)
+        for row in reader:
+            cursor.execute('''INSERT INTO attendees (first_name, last_name, preferred_name, company, title, email) 
+                            VALUES (?, ?, ?, ?, ?, ?)''',
+                        (row['first_name'], row['last_name'], row['preferred_name'], row['company'], row['title'], row['email']))
+        conn.commit()
+        conn.close()
+        return {"message": "Attendees imported successfully"}
 
 # Thank you page
 @app.get("/thank-you", response_class=HTMLResponse)
