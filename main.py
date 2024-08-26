@@ -1,74 +1,102 @@
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import FastAPI, Form, HTTPException
+from PIL import Image, ImageDraw, ImageFont
+from fastapi.responses import HTMLResponse, RedirectResponse
 import sqlite3
 import os
 
 app = FastAPI()
 
-class Attendee(BaseModel):
-    first_name: str
-    last_name: str
-    preferred_name: str = None
-    company: str
-    title: str
-    email: str
+# Serve the HTML form
+@app.get("/register", response_class=HTMLResponse)
+async def get_registration_form():
+    html_content = """
+    <html>
+        <body>
+            <h2>Check-In Form</h2>
+            <form action="/register" method="post">
+                <label for="first_name">First Name:</label><br>
+                <input type="text" id="first_name" name="first_name" required><br><br>
+                <label for="last_name">Last Name:</label><br>
+                <input type="text" id="last_name" name="last_name" required><br><br>
+                <label for="preferred_name">Preferred Name:</label><br>
+                <input type="text" id="preferred_name" name="preferred_name"><br><br>
+                <label for="company">Company:</label><br>
+                <input type="text" id="company" name="company" required><br><br>
+                <label for="title">Title:</label><br>
+                <input type="text" id="title" name="title"><br><br>
+                <label for="email">Email:</label><br>
+                <input type="email" id="email" name="email" required><br><br>
+                <input type="submit" value="Check In">
+            </form>
+        </body>
+    </html>
+    """
+    return html_content
 
-def get_db_connection():
+# Process form submission and print label
+@app.post("/register")
+async def register_attendee(
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    preferred_name: str = Form(None),
+    company: str = Form(...),
+    title: str = Form(...),
+    email: str = Form(...)
+):
+    # Save the attendee in the database
     conn = sqlite3.connect('attendees.db')
-    conn.row_factory = sqlite3.Row
-    return conn
-
-@app.post("/register/")
-async def register_attendee(attendee: Attendee):
-    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''INSERT INTO attendees (first_name, last_name, preferred_name, company, title, email) 
-                      VALUES (?, ?, ?, ?, ?, ?)''',
-                   (attendee.first_name, attendee.last_name, attendee.preferred_name, attendee.company, attendee.title, attendee.email))
+    cursor.execute('''INSERT INTO attendees (first_name, last_name, preferred_name, company, title, email, checked_in)
+                      VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   (first_name, last_name, preferred_name, company, title, email, True))
+    attendee_id = cursor.lastrowid
     conn.commit()
-    conn.close()
-    return {"message": "Attendee registered successfully"}
-
-@app.get("/export/")
-async def export_checked_in():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM attendees WHERE checked_in = TRUE")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
-@app.post("/clear/")
-async def clear_database():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM attendees")
-    conn.commit()
-    conn.close()
-    return {"message": "Database cleared successfully"}
-
-@app.post("/check-in/{attendee_id}")
-async def check_in_attendee(attendee_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE attendees SET checked_in = TRUE WHERE id = ?", (attendee_id,))
-    conn.commit()
+    
+    # Fetch the newly created attendee record
     cursor.execute("SELECT * FROM attendees WHERE id = ?", (attendee_id,))
     attendee = cursor.fetchone()
     conn.close()
 
     if attendee:
+        # Print the label
         print_label(attendee)
-        return {"message": "Checked in and label printed"}
+        return RedirectResponse(url="/thank-you", status_code=303)
     else:
         raise HTTPException(status_code=404, detail="Attendee not found")
 
 def print_label(attendee):
-    name = attendee['preferred_name'] or attendee['first_name']
-    label_content = f"""
-    N: {name} {attendee['last_name']}
-    C: {attendee['company']}
-    """
-    with open("label.txt", "w") as file:
-        file.write(label_content)
-    os.system(f"lp -d DYMO_LabelWriter label.txt")
+    # Prepare text
+    name = attendee[3] if attendee[3] else attendee[1]  # preferred_name or first_name
+    text = f"{name} {attendee[2]}\n{attendee[4]}"  # Last name and Company
+
+    # Load logo image
+    logo = Image.open("logo.png")
+
+    # Create a blank image with a white background
+    label_width = 400
+    label_height = 300
+    label = Image.new('RGB', (label_width, label_height), 'white')
+
+    # Paste the logo into the label
+    logo = logo.resize((label_width, int(label_width / logo.width * logo.height)))  # Resize logo
+    label.paste(logo, (0, 0))
+
+    # Prepare to draw text
+    draw = ImageDraw.Draw(label)
+    font = ImageFont.load_default()
+
+    # Position text below the logo
+    text_y_position = logo.height + 10  # 10 pixels below the logo
+    draw.text((10, text_y_position), text, fill="black", font=font)
+
+    # Save the final label as an image
+    label_path = "/tmp/label.png"
+    label.save(label_path)
+
+    # Print the label using CUPS
+    os.system(f"lp -d DYMOLabelWriter -o fit-to-page {label_path}")
+
+# Thank you page
+@app.get("/thank-you", response_class=HTMLResponse)
+async def thank_you():
+    return "<html><body><h3>Thank you for registering! Your name badge is printing.</h3></body></html>"
