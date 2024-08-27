@@ -72,7 +72,7 @@ Here are the steps to implement the check-in system using a Raspberry Pi and a D
 - Create main.py with the following content:
 
   - ``` python
-    from fastapi import FastAPI, Form, HTTPException
+    from fastapi import FastAPI, Form, HTTPException, UploadFile, File
     from PIL import Image, ImageDraw, ImageFont
     from fastapi.responses import HTMLResponse, RedirectResponse
     import sqlite3
@@ -80,6 +80,11 @@ Here are the steps to implement the check-in system using a Raspberry Pi and a D
     import os
 
     app = FastAPI()
+
+    def get_db_connection():
+        conn = sqlite3.connect('attendees.db')
+        conn.row_factory = sqlite3.Row
+        return conn
 
     # Serve the HTML form
     @app.get("/register", response_class=HTMLResponse)
@@ -145,15 +150,17 @@ Here are the steps to implement the check-in system using a Raspberry Pi and a D
         text = f"{name} {attendee[2]}\n{attendee[4]}"  # Last name and Company
 
         # Load logo image
-        logo = Image.open("logo.png")
+        logo = Image.open("logo.png").convert("RGB")
 
         # Create a blank image with a white background
         label_width = 400
         label_height = 300
         label = Image.new('RGB', (label_width, label_height), 'white')
 
-        # Paste the logo into the label
-        logo = logo.resize((label_width, int(label_width / logo.width * logo.height)))  # Resize logo
+        # Resize and paste the logo into the label
+        logo_width = label_width
+        logo_height = int(label_width / logo.width * logo.height)
+        logo = logo.resize((logo_width, logo_height), Image.ANTIALIAS)
         label.paste(logo, (0, 0))
 
         # Prepare to draw text
@@ -161,15 +168,15 @@ Here are the steps to implement the check-in system using a Raspberry Pi and a D
         font = ImageFont.load_default()
 
         # Position text below the logo
-        text_y_position = logo.height + 10  # 10 pixels below the logo
+        text_y_position = logo_height + 10  # 10 pixels below the logo
         draw.text((10, text_y_position), text, fill="black", font=font)
 
         # Save the final label as an image
-        label_path = "/tmp/label.png"
+        label_path = "label.png"
         label.save(label_path)
 
         # Print the label using CUPS
-        os.system(f"lp -d DYMOLabelWriter -o fit-to-page {label_path}")
+        os.system(f"lp -d DYMO_LabelWriter -o fit-to-page {label_path}")
 
     @app.post("/import/")
     async def import_attendees(file: UploadFile = File(...)):
